@@ -291,7 +291,6 @@ export class Eventer {
 		command: Extract<Command, {kind: 'list'}>,
 		guildId: Snowflake,
 	): CreateMessageBody {
-		const {timeZone} = this.config;
 		const now = Date.now();
 		const windowEnd = now + LIST_WINDOW_DAYS * 86_400_000;
 		const entries = this.store
@@ -313,20 +312,40 @@ export class Eventer {
 			return {embeds: [{title, description: hint, color: COLOR_INFO}], allowed_mentions: {parse: []}};
 		}
 
-		const lines = scoped.map(
+		// Pagination: LIST_MAX_LINES events per page, page 1 by default.
+		const totalPages = Math.max(1, Math.ceil(scoped.length / LIST_MAX_LINES));
+		if (command.page > totalPages) {
+			return this.errorBody(
+				`There ${totalPages === 1 ? 'is only' : 'are only'} ${totalPages} ` +
+					`${totalPages === 1 ? 'page' : 'pages'} of events (${scoped.length} total).`,
+			);
+		}
+		const pageEntries = scoped.slice(
+			(command.page - 1) * LIST_MAX_LINES,
+			command.page * LIST_MAX_LINES,
+		);
+
+		const lines = pageEntries.map(
 			(entry) =>
 				`${emojiFor(entry)} ${this.occurrenceLine(entry)} (#${entry.id})`,
 		);
-		if (lines.length > LIST_MAX_LINES) {
-			const extra = lines.length - LIST_MAX_LINES;
-			lines.length = LIST_MAX_LINES;
-			lines.push(`…and ${extra} more`);
-		}
 		let description = lines.join('\n');
 		if (description.length > EMBED_LIMIT) {
 			description = `${description.slice(0, EMBED_LIMIT - 4)}\n[…]`;
 		}
-		return {embeds: [{title, description, color: COLOR_INFO}], allowed_mentions: {parse: []}};
+
+		const scopeToken = command.scope === 'all' ? 'all ' : '';
+		const footer =
+			totalPages > 1
+				? `Page ${command.page}/${totalPages} · ${scoped.length} events — ` +
+					(command.page < totalPages
+						? `@eventer list ${scopeToken}${command.page + 1} for more`
+						: 'end of list')
+				: `${scoped.length} ${scoped.length === 1 ? 'event' : 'events'}`;
+		return {
+			embeds: [{title, description, color: COLOR_INFO, footer: {text: footer}}],
+			allowed_mentions: {parse: []},
+		};
 	}
 
 	private occurrenceLine(entry: EventEntry): string {
@@ -342,7 +361,7 @@ export class Eventer {
 		const description = [
 			'`@eventer add <date> [HH:MM] <title> [--yearly|--monthly|--weekly]`',
 			'`@eventer remove <id>`',
-			'`@eventer list [all]`',
+			'`@eventer list [all] [page]`',
 			'',
 			'Examples:',
 			"`@eventer add --yearly 03-15 Maria's birthday`",

@@ -17,7 +17,7 @@ export interface CommandDate {
 export type Command =
 	| {kind: 'add'; recurrence: Recurrence; date: CommandDate; time: WallTime | null; title: string}
 	| {kind: 'remove'; id: string}
-	| {kind: 'list'; scope: 'month' | 'all'}
+	| {kind: 'list'; scope: 'month' | 'all'; page: number}
 	| {kind: 'help'};
 
 export interface ParsedCommand {
@@ -71,17 +71,37 @@ export function parseCommand(content: string, botUserId: Snowflake): ParsedComma
 			}
 			return {command: {kind: 'remove', id: rest[0]!.toLowerCase()}};
 		case 'list':
-			if (rest.length === 0) return {command: {kind: 'list', scope: 'month'}};
-			if (rest.length === 1 && rest[0]!.toLowerCase() === 'all') {
-				return {command: {kind: 'list', scope: 'all'}};
-			}
-			return {error: 'Usage: @eventer list [all]'};
+			return parseList(rest);
 		case 'help':
 		case 'usage':
 			return {command: {kind: 'help'}};
 		default:
 			return {error: `Unknown command "${tokens[0]}". Try @eventer help`};
 	}
+}
+
+function parseList(tokens: string[]): ParsedCommand {
+	const LIST_USAGE = 'Usage: @eventer list [all] [page]';
+	let scope: 'month' | 'all' = 'month';
+	let page = 1;
+	for (const token of tokens) {
+		if (token.toLowerCase() === 'all') {
+			if (scope === 'all') return {error: LIST_USAGE};
+			scope = 'all';
+			continue;
+		}
+		if (/^\d+$/.test(token)) {
+			const parsed = Number(token);
+			if (parsed < 1 || !Number.isSafeInteger(parsed)) {
+				return {error: 'Page must be a positive number. ' + LIST_USAGE};
+			}
+			if (page !== 1) return {error: LIST_USAGE};
+			page = parsed;
+			continue;
+		}
+		return {error: LIST_USAGE};
+	}
+	return {command: {kind: 'list', scope, page}};
 }
 
 function parseAdd(tokens: string[]): ParsedCommand {

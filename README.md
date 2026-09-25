@@ -41,7 +41,9 @@ On the day (at the time, or `DEFAULT_EVENT_HOUR` for all-day events):
 - `@eventer remove <id>` removes one of your events; the user ids in
   `EVENT_ADMINS` can remove anyone's.
 - `@eventer list` shows the next month of events; `@eventer list all` shows
-  everything upcoming. `@eventer help` prints usage.
+  everything upcoming. Long lists are paginated at 25 events per page —
+  `@eventer list all 2` shows the second page, and the footer of each page
+  tells you how many pages there are. `@eventer help` prints usage.
 - A scheduler ticks every `TICK_SECONDS` and posts each due event into the
   channel named `events` (case-insensitive; or set an exact channel ID).
   All-day events announce at `DEFAULT_EVENT_HOUR` in `TIMEZONE`.
@@ -130,8 +132,8 @@ git pull && docker compose pull && docker compose up -d
 
 ## Releases and update notifications
 
-`docker-compose.yml` pins an exact image version (`ghcr.io/joaocostaifg/eventer:0.1.0`).
-Cutting a release looks like:
+`docker-compose.yml` pins an exact image version; Renovate opens PRs to bump
+it whenever a new `v*` tag is pushed. Cutting a release looks like:
 
 ```bash
 git tag v0.1.1 && git push origin v0.1.1

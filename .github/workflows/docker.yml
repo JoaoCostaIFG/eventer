@@ -34,6 +34,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      # Single source of truth for the image version label; tags still come
+      # from the git ref, so no version is ever hard-coded in this file.
+      - name: Read version from package.json
+        id: version
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      # A v* tag is the release trigger; refuse to ship one that disagrees
+      # with package.json so the two can never drift apart.
+      - name: Check v* tag matches package.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          PKG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "v$PKG_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+
       - name: Set up QEMU (arm64 emulation)
         uses: docker/setup-qemu-action@v3
 
@@ -79,13 +97,14 @@ jobs:
           # For a multi-arch image GHCR reads the package description from the
           # image *index* annotations, so scope them with the index: prefix.
           annotations: |
+            index:org.opencontainers.image.version=${{ steps.version.outputs.version }}
             index:org.opencontainers.image.description=Events bot for self-hosted Fluxer instances: schedules, lists, and announces guild events in an events channel
             index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
   # Creates the GitHub Release for a v* tag push, with auto-generated notes.
-  # The image version tags (0.1.0 / 0.1 / 1) come from the build job above.
+  # The image version tags (1.2.3 / 1.2 / 1) come from the build job above.
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build

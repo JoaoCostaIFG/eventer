@@ -60,6 +60,23 @@ const seedLocalDate = `${nextYear}-${pad(nextMonth + 1)}-${pad(nextDay)}`;
 
 const seedOccurrence = new Date(Date.now() - 60_000).toISOString();
 
+// 25 fillers more than a year out push "list all" past one 25-line page,
+// exercising pagination without entering the 31-day "list" window.
+const fillers = Array.from({length: 25}, (_, i) => {
+	const when = new Date(Date.now() + (400 + i) * 86_400_000);
+	return {
+		id: `f${pad(i + 1)}`,
+		guildId: GUILD,
+		title: `Filler ${pad(i + 1)}`,
+		creatorId: '42',
+		creatorName: 'Aria',
+		recurrence: 'yearly',
+		nextOccurrence: when.toISOString(),
+		localDate: when.toISOString().slice(0, 10),
+		createdAt: new Date().toISOString(),
+	};
+});
+
 // -- Seed the store before the bot starts -------------------------------------
 
 rmSync(DATA_DIR, {recursive: true, force: true});
@@ -81,6 +98,7 @@ await writeFile(
 				localDate: now.toISOString().slice(0, 10),
 				createdAt: new Date().toISOString(),
 			},
+			...fillers,
 		],
 	}),
 	'utf8',
@@ -195,6 +213,10 @@ wss.on('connection', (ws) => {
 				dispatch(ws, 'MESSAGE_CREATE', message(aria, `<@${BOT_ID}> add 2026-02-30 Party`, botMention, 'm10'));
 				dispatch(ws, 'MESSAGE_CREATE', message(aria, `<@${BOT_ID}> frobnicate`, botMention, 'm11'));
 				dispatch(ws, 'MESSAGE_CREATE', message(aria, `<@${BOT_ID}>`, botMention, 'm12'));
+				// Pagination: 27 events remain (maria + seed + 25 fillers).
+				dispatch(ws, 'MESSAGE_CREATE', message(aria, `<@${BOT_ID}> list all 2`, botMention, 'm13'));
+				dispatch(ws, 'MESSAGE_CREATE', message(aria, `<@${BOT_ID}> list all 99`, botMention, 'm14'));
+				dispatch(ws, 'MESSAGE_CREATE', message(aria, `<@${BOT_ID}> list all xyz`, botMention, 'm15'));
 			}, 300);
 		}
 		if (payload.op === 1) {
@@ -263,7 +285,7 @@ server.listen(PORT, '127.0.0.1', () => {
 				JSON.stringify(announcement.allowed_mentions) === '{"parse":[]}', announcement.allowed_mentions);
 		}
 
-		check('ten command replies, strays ignored', replies.length === 10, replies.length);
+		check('thirteen command replies, strays ignored', replies.length === 13, replies.length);
 
 		// Replies are matched by content, not order: the bot's HTTP client may
 		// complete requests out of issue order.
@@ -293,14 +315,35 @@ server.listen(PORT, '127.0.0.1', () => {
 
 		const listAlls = replies.filter((r) => embed(r)?.title === '📅 All upcoming events');
 		const listAllBefore = listAlls.find((r) => embed(r)?.description?.includes('Christmas dinner'));
-		const listAllAfter = listAlls.find((r) => !embed(r)?.description?.includes('Christmas dinner'));
+		const listAllAfter = listAlls.find((r) =>
+			embed(r)?.description?.includes("Maria's birthday") &&
+			!embed(r)?.description?.includes('Christmas dinner'));
 		check('list all before/after the remove',
-			listAlls.length === 2 &&
+			listAlls.length === 3 &&
 			listAllBefore?.body !== undefined &&
 			embed(listAllBefore)?.description?.includes("Maria's birthday (#1)") &&
 			listAllAfter !== undefined &&
 			embed(listAllAfter)?.description?.includes("Maria's birthday"),
 			listAlls.map((r) => embed(r)?.description));
+
+		// 28 events at m4 (seed + maria + christmas + 25 fillers) -> 2 pages.
+		check('multi-page list footer advertises the next page',
+			embed(listAllBefore)?.footer?.text === 'Page 1/2 · 28 events — @eventer list all 2 for more',
+			embed(listAllBefore)?.footer?.text);
+
+		// 27 events at m13 (christmas removed) -> page 2 holds the last two.
+		const pageTwo = listAlls.find((r) => embed(r)?.footer?.text?.startsWith('Page 2/'));
+		check('list all 2 shows the overflow page',
+			embed(pageTwo)?.description?.includes('Filler 25') &&
+			!embed(pageTwo)?.description?.includes("Maria's birthday") &&
+			embed(pageTwo)?.footer?.text === 'Page 2/2 · 27 events — end of list',
+			pageTwo && embed(pageTwo));
+
+		check('out-of-range page reports the page count',
+			withDescription('There are only 2 pages of events (27 total).') !== undefined);
+
+		check('non-numeric page rejected',
+			withDescription('Usage: @eventer list [all] [page]') !== undefined);
 
 		check('remove by non-creator denied',
 			withDescription('Only the person who added') !== undefined,
