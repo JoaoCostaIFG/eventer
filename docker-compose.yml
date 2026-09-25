@@ -1,0 +1,23 @@
+services:
+  eventer:
+    # Pinned version — Renovate opens PRs to bump this as new releases are
+    # tagged. The published multi-arch image (linux/amd64 + linux/arm64)
+    # carries matching semver tags (0.1.0, 0.1, 1) for every v* release.
+    # `build: .` below makes `docker compose up --build` build locally instead;
+    # for local builds against the latest code use tag `main` or `latest`.
+    image: ghcr.io/joaocostaifg/eventer:0.1.0
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    mem_limit: 128m
+    volumes:
+      - eventer-data:/app/data
+
+    # NOTE: keep routing through the public origin (INSTANCE_URL). Do NOT
+    # point API_URL at the `api` container directly — see "Same-server
+    # deployments" in the README. Self-hosted Fluxer defaults to
+    # FLUXER_TRUST_CLIENT_IP_HEADER=true, so the API rejects every request
+    # that did not arrive through the edge proxy (403 Forbidden [FORBIDDEN]).
+
+volumes:
+  eventer-data:

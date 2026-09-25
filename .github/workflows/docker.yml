@@ -1,0 +1,100 @@
+name: docker
+
+# Builds a multi-arch (linux/amd64 + linux/arm64) image and publishes it to
+# GitHub Container Registry as ghcr.io/<owner>/eventer.
+#
+# Tags produced by docker/metadata-action:
+#   - push to main            -> latest, main, sha-<short>
+#   - push of v1.2.3          -> 1.2.3, 1.2, 1
+#   - pull request            -> build only, nothing is pushed
+#
+# The package page on GHCR (description + README) is populated through the
+# org.opencontainers.image.* annotations/labels and the automatic link between
+# the package and this repository.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # ghcr.io requires an all-lowercase image path, and GitHub logins can
+      # contain uppercase letters.
+      - name: Compute image name
+        id: image
+        run: echo "name=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # For a multi-arch image GHCR reads the package description from the
+          # image *index* annotations, so scope them with the index: prefix.
+          annotations: |
+            index:org.opencontainers.image.description=Events bot for self-hosted Fluxer instances: schedules, lists, and announces guild events in an events channel
+            index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Creates the GitHub Release for a v* tag push, with auto-generated notes.
+  # The image version tags (0.1.0 / 0.1 / 1) come from the build job above.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag

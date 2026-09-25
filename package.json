@@ -1,0 +1,28 @@
+{
+	"name": "eventer",
+	"version": "0.1.0",
+	"description": "Events bot for self-hosted Fluxer instances: schedules, lists, and announces guild events (birthdays, game nights, ...) in an events channel",
+	"type": "module",
+	"private": true,
+	"license": "MIT",
+	"engines": {
+		"node": ">=20"
+	},
+	"scripts": {
+		"build": "tsc",
+		"start": "node dist/index.js",
+		"dev": "tsx watch src/index.ts",
+		"typecheck": "tsc --noEmit",
+		"smoke": "node scripts/smoke.mjs"
+	},
+	"dependencies": {
+		"dotenv": "^16.4.5",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.2",
+		"@types/ws": "^8.5.13",
+		"tsx": "^4.19.2",
+		"typescript": "^5.7.2"
+	}
+}
