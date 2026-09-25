@@ -1,6 +1,6 @@
 {
 	"name": "eventer",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "Events bot for self-hosted Fluxer instances: schedules, lists, and announces guild events (birthdays, game nights, ...) in an events channel",
 	"type": "module",
 	"private": true,

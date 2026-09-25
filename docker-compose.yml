@@ -5,7 +5,7 @@ services:
     # carries matching semver tags (0.1.0, 0.1, 1) for every v* release.
     # `build: .` below makes `docker compose up --build` build locally instead;
     # for local builds against the latest code use tag `main` or `latest`.
-    image: ghcr.io/joaocostaifg/eventer:0.1.0
+    image: ghcr.io/joaocostaifg/eventer:0.1.1
     build: .
     restart: unless-stopped
     env_file: .env

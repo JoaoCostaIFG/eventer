@@ -123,10 +123,17 @@ export function loadConfig(): Config {
 		adminIds.add(id);
 	}
 
+	// Channel names are written "#events" in the UI; tolerate the same form here.
+	const eventsChannelRaw = env('EVENTS_CHANNEL_NAME') ?? 'events';
+	const eventsChannel = eventsChannelRaw.replace(/^#/, '').trim().toLowerCase();
+	if (eventsChannel === '') {
+		throw new Error('EVENTS_CHANNEL_NAME must be a channel name or a channel ID');
+	}
+
 	return {
 		instanceUrl,
 		botToken,
-		eventsChannel: (env('EVENTS_CHANNEL_NAME') ?? 'events').toLowerCase(),
+		eventsChannel,
 		timeZone,
 		defaultEventHour: parseIntEnv('DEFAULT_EVENT_HOUR', env('DEFAULT_EVENT_HOUR') ?? '9', 0, 23),
 		tickSeconds: parseIntEnv('TICK_SECONDS', env('TICK_SECONDS') ?? '30', 1),
