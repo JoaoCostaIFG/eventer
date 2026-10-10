@@ -206,4 +206,5 @@ npm start          # or: npm run dev for hot-reload during development
 
 ## License
 
-MIT
+Licensed under the European Union Public Licence v. 1.2 (EUPL-1.2) — see
+[LICENSE](LICENSE).

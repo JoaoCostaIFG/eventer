@@ -4,7 +4,7 @@
 	"description": "Events bot for self-hosted Fluxer instances: schedules, lists, and announces guild events (birthdays, game nights, ...) in an events channel",
 	"type": "module",
 	"private": true,
-	"license": "MIT",
+	"license": "EUPL-1.2",
 	"engines": {
 		"node": ">=20"
 	},

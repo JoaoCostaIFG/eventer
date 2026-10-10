@@ -18,7 +18,7 @@ LABEL org.opencontainers.image.title="eventer" \
 	org.opencontainers.image.description="Events bot for self-hosted Fluxer instances: schedules, lists, and announces guild events in an events channel" \
 	org.opencontainers.image.source=https://github.com/JoaoCostaIFG/eventer \
 	org.opencontainers.image.url=https://github.com/JoaoCostaIFG/eventer \
-	org.opencontainers.image.licenses=MIT \
+	org.opencontainers.image.licenses=EUPL-1.2 \
 	org.opencontainers.image.authors="JoaoCostaIFG"
 
 COPY package.json package-lock.json* ./
