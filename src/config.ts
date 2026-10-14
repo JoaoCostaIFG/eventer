@@ -28,6 +28,11 @@ export interface Config {
 	gatewayUrl?: string;
 	/** Directory for the persistent event store. */
 	dataDir: string;
+	/**
+	 * Slack added to two heartbeat intervals before the gateway silence
+	 * watchdog drops a quiet connection. Optional; mainly a test knob.
+	 */
+	watchdogMarginMs?: number;
 }
 
 function env(name: string): string | undefined {
@@ -130,6 +135,11 @@ export function loadConfig(): Config {
 		throw new Error('EVENTS_CHANNEL_NAME must be a channel name or a channel ID');
 	}
 
+	const watchdogMarginRaw = env('GATEWAY_WATCHDOG_MARGIN_MS');
+	const watchdogMarginMs = watchdogMarginRaw === undefined
+		? undefined
+		: parseIntEnv('GATEWAY_WATCHDOG_MARGIN_MS', watchdogMarginRaw, 0);
+
 	return {
 		instanceUrl,
 		botToken,
@@ -144,5 +154,6 @@ export function loadConfig(): Config {
 		apiUrl: apiUrlRaw ? parseHttpUrl('API_URL', apiUrlRaw) : undefined,
 		gatewayUrl: gatewayUrlRaw ? parseWsUrl('GATEWAY_URL', gatewayUrlRaw) : undefined,
 		dataDir: env('DATA_DIR') ?? 'data',
+		watchdogMarginMs,
 	};
 }

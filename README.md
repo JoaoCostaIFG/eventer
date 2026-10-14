@@ -115,8 +115,10 @@ docker compose logs -f
 
 The event store lives in the `eventer-data` volume. The container healthcheck
 watches a heartbeat file the bot touches whenever the gateway connection is
-alive, so a wedged connection ends in a container restart
-(`restart: unless-stopped`).
+alive, so a bot that stops making progress is flagged unhealthy. Note that
+plain Docker Compose never restarts unhealthy containers on its own; the bot
+is expected to self-heal — the gateway client drops a silent connection
+within ~two heartbeat intervals and resumes its session.
 
 To build locally instead of pulling (e.g. for development):
 
@@ -182,8 +184,9 @@ npm start          # or: npm run dev for hot-reload during development
 - `npm run typecheck` — type-check without emitting
 - `npm run smoke` — end-to-end test against a mock Fluxer instance (discovery,
   gateway identify, mention commands: add/list/remove/permissions/errors, the
-  scheduler announcing a due event, recurrence advance, disconnect/resume).
-  Runs the built output, so `npm run build` first.
+  scheduler announcing a due event, recurrence advance, disconnect/resume,
+  invalid-session re-identify, black-hole watchdog recovery). Runs the built
+  output, so `npm run build` first.
 
 ## Behavior notes
 
@@ -202,7 +205,11 @@ npm start          # or: npm run dev for hot-reload during development
   resets everything; the bot rebuilds it from new commands.
 - **Rate limits**: the HTTP client honors `Retry-After` on 429s; the gateway
   client heartbeats on the advertised interval, resumes sessions within the
-  60s retention window, and reconnects with backoff.
+  60s retention window, and reconnects with backoff. A silence watchdog
+  independent of socket events drops a connection that receives nothing for
+  ~two heartbeat intervals (plus 10s), so a gateway that vanishes without a
+  close frame — e.g. the stack recreated behind a reverse proxy — is
+  recovered by resume instead of wedging until restart.
 
 ## License
 

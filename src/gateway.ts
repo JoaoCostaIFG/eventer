@@ -102,11 +102,28 @@ const OP = {
 
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;
+/** How often the silence watchdog re-evaluates the age of the last inbound frame. */
+const WATCHDOG_TICK_MS = 5_000;
+/** Slack added to two heartbeat intervals before a silent connection is torn down. */
+const WATCHDOG_MARGIN_MS = 10_000;
+/** Silence deadline before HELLO arrives, when heartbeat_interval is still unknown. */
+const PRE_HELLO_SILENCE_MS = 15_000;
+/** Deadline for the WebSocket upgrade itself; Node applies no default. */
+const HANDSHAKE_TIMEOUT_MS = 15_000;
 
 export interface GatewayEvents {
 	ready: [user: ReadyData['user']];
 	dispatch: [t: string, d: unknown];
 	fatal: [error: Error];
+}
+
+export interface GatewayClientOptions {
+	/**
+	 * Slack added to two heartbeat intervals before the silence watchdog
+	 * tears down a connection that stopped receiving frames. Mainly useful
+	 * for tests; defaults to 10s.
+	 */
+	watchdogMarginMs?: number;
 }
 
 export class GatewayClient extends EventEmitter<GatewayEvents> {
@@ -121,16 +138,21 @@ export class GatewayClient extends EventEmitter<GatewayEvents> {
 	private closedByUs = false;
 	private stopped = false;
 	private lastHeartbeatFileTouch = 0;
+	private lastTrafficAt = 0;
+	private watchdogTimer: NodeJS.Timeout | null = null;
 
 	constructor(
 		private readonly url: string,
 		private readonly token: string,
+		private readonly opts: GatewayClientOptions = {},
 	) {
 		super();
 	}
 
 	start(): void {
 		this.stopped = false;
+		this.lastTrafficAt = Date.now();
+		this.startWatchdog();
 		this.connect();
 	}
 
@@ -138,6 +160,7 @@ export class GatewayClient extends EventEmitter<GatewayEvents> {
 		this.stopped = true;
 		this.closedByUs = true;
 		this.clearHeartbeat();
+		this.clearWatchdog();
 		this.ws?.close(1000);
 		this.ws = null;
 	}
@@ -149,10 +172,11 @@ export class GatewayClient extends EventEmitter<GatewayEvents> {
 		logger.info(`Connecting to gateway ${this.url}`);
 		this.closedByUs = false;
 
-		const ws = new WebSocket(url);
+		const ws = new WebSocket(url, {handshakeTimeout: HANDSHAKE_TIMEOUT_MS});
 		this.ws = ws;
 
 		ws.on('open', () => {
+			this.lastTrafficAt = Date.now();
 			logger.debug('WebSocket opened');
 		});
 
@@ -180,6 +204,7 @@ export class GatewayClient extends EventEmitter<GatewayEvents> {
 	}
 
 	private onMessage(raw: string): void {
+		this.lastTrafficAt = Date.now();
 		this.touchHeartbeatFile();
 
 		let payload: GatewayPayload;
@@ -224,11 +249,14 @@ export class GatewayClient extends EventEmitter<GatewayEvents> {
 				this.ws?.close(4000);
 				break;
 			case OP.INVALID_SESSION:
-				// d is always literal false: the retained session is gone.
+				// d is always literal false: the retained session is gone. The
+				// socket stays up and only HELLO (re)starts the heartbeat
+				// timer, so it must keep running across this fresh IDENTIFY —
+				// clearing it here would leave the connection without liveness
+				// checks for the rest of its life.
 				logger.warn('Gateway reported an invalid session; identifying fresh');
 				this.sessionId = null;
 				this.lastSeq = null;
-				this.clearHeartbeat();
 				setTimeout(() => this.identify(), 1_500);
 				break;
 			default:
@@ -305,6 +333,50 @@ export class GatewayClient extends EventEmitter<GatewayEvents> {
 	private sendHeartbeat(): void {
 		this.acked = false;
 		this.send({op: OP.HEARTBEAT, d: this.lastSeq});
+	}
+
+	// -- Silence watchdog -----------------------------------------------------
+
+	/**
+	 * Heartbeat ticks only prove liveness while the protocol cooperates. If
+	 * the gateway disappears without a close frame — the stack recreated
+	 * behind a reverse proxy is the canonical case — the socket stays "open"
+	 * in both directions and no close/error event ever fires. This watchdog
+	 * is independent of socket events: when no inbound frame at all arrives
+	 * for two heartbeat intervals plus a margin, the connection is presumed
+	 * dead, terminated, and the normal reconnect path takes over.
+	 */
+	private startWatchdog(): void {
+		this.clearWatchdog();
+		this.watchdogTimer = setInterval(() => this.watchdogTick(), WATCHDOG_TICK_MS);
+		this.watchdogTimer.unref?.();
+	}
+
+	private clearWatchdog(): void {
+		if (this.watchdogTimer !== null) {
+			clearInterval(this.watchdogTimer);
+			this.watchdogTimer = null;
+		}
+	}
+
+	private watchdogTick(): void {
+		if (this.stopped || this.ws === null) return;
+		// CONNECTING is covered by the handshake timeout and CLOSED by the
+		// backoff loop; CLOSING is not — a close frame we sent can go
+		// unanswered forever on a dead connection.
+		if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.CLOSED) return;
+		const margin = this.opts.watchdogMarginMs ?? WATCHDOG_MARGIN_MS;
+		const deadline = this.heartbeatIntervalMs > 0
+			? this.heartbeatIntervalMs * 2 + margin
+			: PRE_HELLO_SILENCE_MS;
+		const silentFor = Date.now() - this.lastTrafficAt;
+		if (silentFor > deadline) {
+			logger.warn(
+				`No gateway traffic for ${Math.round(silentFor / 1000)}s ` +
+					`(deadline ${Math.round(deadline / 1000)}s); connection presumed dead, reconnecting`,
+			);
+			this.ws.terminate();
+		}
 	}
 
 	// -- Reconnection ---------------------------------------------------------

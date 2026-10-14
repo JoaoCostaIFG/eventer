@@ -1,6 +1,9 @@
 // Smoke test: runs the built bot against a mock Fluxer instance and asserts
 // the full chain: discovery -> gateway IDENTIFY -> mention commands (add,
 // list, remove, errors) -> scheduler announcement -> recurrence advance.
+// Then the gateway edge cases: close-frame drop -> RESUME -> INVALID_SESSION ->
+// fresh IDENTIFY (heartbeats must survive), and a black-holed connection (no
+// frames, no close) that the silence watchdog must tear down and recover from.
 import {createServer} from 'node:http';
 import {spawn} from 'node:child_process';
 import {mkdirSync, rmSync} from 'node:fs';
@@ -152,8 +155,18 @@ const server = createServer((req, res) => {
 
 const wss = new WebSocketServer({server, path: '/gateway'});
 let identifyPayload = null;
-let resumePayload = null;
+let resumePayloads = [];
 let connections = 0;
+let resumesSeen = 0;
+// Connection on which the post-invalid-session IDENTIFY arrived, and whether
+// that connection kept receiving heartbeats afterwards (the 0.2.0 wedge: the
+// heartbeat timer used to die with the invalid session and never come back).
+let freshIdentifyConn = 0;
+let heartbeatAfterFreshIdentify = false;
+// Connection the server went silent on (black hole: no frames, no close).
+let blackHoleConn = 0;
+// Connection on which RESUMED was sent, and whether heartbeats resumed there.
+let resumedConn = 0;
 let heartbeatAfterResume = false;
 let seq = 0;
 
@@ -179,12 +192,31 @@ const message = (author, content, mentions, id) => ({
 
 wss.on('connection', (ws) => {
 	connections++;
+	const conn = connections;
 	ws.send(JSON.stringify({op: 10, d: {heartbeat_interval: 2000}}));
 
 	ws.on('message', (raw) => {
+		if (conn === blackHoleConn) return; // dead gateway swallows everything
 		const payload = JSON.parse(raw.toString());
 		if (payload.op === 2) {
 			identifyPayload = payload.d;
+			if (resumesSeen === 1 && freshIdentifyConn === 0) {
+				// IDENTIFY after INVALID_SESSION on the same connection.
+				freshIdentifyConn = conn;
+				dispatch(ws, 'READY', {
+					session_id: 'sess-2',
+					user: {id: BOT_ID, username: 'eventer', discriminator: '0001', flags: 0},
+					guilds: [{id: GUILD, unavailable: true}],
+				});
+				dispatch(ws, 'GUILD_CREATE', {
+					id: GUILD,
+					channels: [
+						{id: CHANNEL_EVENTS, type: 0, guild_id: GUILD, name: 'Events'},
+						{id: CHANNEL_GENERAL, type: 0, guild_id: GUILD, name: 'general'},
+					],
+				});
+				return;
+			}
 			dispatch(ws, 'READY', {
 				session_id: 'sess-1',
 				user: {id: BOT_ID, username: 'eventer', discriminator: '0001', flags: 0},
@@ -221,17 +253,28 @@ wss.on('connection', (ws) => {
 		}
 		if (payload.op === 1) {
 			ws.send(JSON.stringify({op: 11}));
-			if (resumePayload !== null) heartbeatAfterResume = true;
 		}
 		if (payload.op === 6) {
-			resumePayload = payload.d;
-			heartbeatAfterResume = false;
-			ws.send(JSON.stringify({op: 0, t: 'RESUMED', s: seq}));
+			resumePayloads.push(payload.d);
+			resumesSeen++;
+			if (resumesSeen === 1) {
+				// First resume attempt: the session is gone (fresh connection
+				// after a restart), so the gateway invalidates it.
+				ws.send(JSON.stringify({op: 9, d: false}));
+			} else {
+				resumedConn = conn;
+				heartbeatAfterResume = false;
+				dispatch(ws, 'RESUMED', undefined);
+			}
 		}
+		if (payload.op === 1 && conn === freshIdentifyConn) heartbeatAfterFreshIdentify = true;
+		if (payload.op === 1 && conn === resumedConn && resumedConn !== 0) heartbeatAfterResume = true;
 	});
 });
 
 // -- Run the bot -------------------------------------------------------------------
+
+let botLog = '';
 
 server.listen(PORT, '127.0.0.1', () => {
 	console.log(`mock instance on ${BASE}`);
@@ -248,11 +291,20 @@ server.listen(PORT, '127.0.0.1', () => {
 			GRACE_HOURS: '24',
 			DATA_DIR: DATA_DIR,
 			LOG_LEVEL: 'debug',
+			// Shrink the silence watchdog (2 * 2000ms + 500ms) so the black-hole
+			// phase runs fast; production keeps the 10s default.
+			GATEWAY_WATCHDOG_MARGIN_MS: '500',
 		},
 		stdio: ['ignore', 'pipe', 'pipe'],
 	});
-	child.stdout.on('data', (d) => process.stdout.write(`[bot] ${d}`));
-	child.stderr.on('data', (d) => process.stderr.write(`[bot] ${d}`));
+	child.stdout.on('data', (d) => {
+		botLog += d;
+		process.stdout.write(`[bot] ${d}`);
+	});
+	child.stderr.on('data', (d) => {
+		botLog += d; // warn/error levels log to stderr
+		process.stderr.write(`[bot] ${d}`);
+	});
 
 	setTimeout(async () => {
 		console.log('\n--- assertions ---');
@@ -361,18 +413,37 @@ server.listen(PORT, '127.0.0.1', () => {
 		check('bare mention shows help',
 			byTitle('🎂 eventer — commands') !== undefined);
 
-		// -- Phase 2: forced disconnect -> reconnect -> RESUME -----------------
-		console.log('\n--- resume test: dropping connection ---');
+		// -- Phase 2: drop -> resume -> INVALID_SESSION -> fresh IDENTIFY -------
+		console.log('\n--- invalid-session test: dropping connection ---');
 		for (const client of wss.clients) client.close(4000, 'Session drain requested; reconnect to continue');
-		await new Promise((r) => setTimeout(r, 3500));
+		await new Promise((r) => setTimeout(r, 6500));
 
+		const firstResume = resumePayloads[0];
 		check('reconnected once after the drop', connections === 2, connections);
 		check('sent RESUME with the retained session and last sequence',
-			resumePayload?.token === '1234567890.secretsecret' &&
-			resumePayload?.session_id === 'sess-1' &&
-			typeof resumePayload?.seq === 'number' && resumePayload.seq >= 3,
-			resumePayload);
-		check('heartbeats continue after resume', heartbeatAfterResume);
+			firstResume?.token === '1234567890.secretsecret' &&
+			firstResume?.session_id === 'sess-1' &&
+			typeof firstResume?.seq === 'number' && firstResume.seq >= 3,
+			firstResume);
+		check('identified fresh on the same connection after INVALID_SESSION',
+			freshIdentifyConn === 2, freshIdentifyConn);
+		check('heartbeats continue after the fresh identify',
+			heartbeatAfterFreshIdentify, heartbeatAfterFreshIdentify);
+
+		// -- Phase 3: black hole (no frames, no close) -> watchdog recovery ----
+		console.log('\n--- watchdog test: gateway goes silent without closing ---');
+		blackHoleConn = 2; // the server stops answering (and talking) entirely
+		await new Promise((r) => setTimeout(r, 13000));
+
+		const secondResume = resumePayloads[1];
+		check('watchdog reconnected after the silent black hole', connections === 3, connections);
+		check('watchdog kill was logged', /connection presumed dead/.test(botLog),
+			botLog.split('\n').filter((l) => l.includes('WARN')).join(' | '));
+		check('second resume used the fresh session',
+			secondResume?.session_id === 'sess-2' &&
+			typeof secondResume?.seq === 'number' && secondResume.seq >= 19,
+			secondResume);
+		check('heartbeats continue after the watchdog reconnect', heartbeatAfterResume);
 
 		const {readFile} = await import('node:fs/promises');
 		const store = JSON.parse(await readFile(`${DATA_DIR}/events.json`, 'utf8'));

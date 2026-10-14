@@ -39,7 +39,9 @@ async function main(): Promise<void> {
 		(entries) => eventer.announce(entries),
 	);
 
-	const gateway = new GatewayClient(endpoints.gateway, config.botToken);
+	const gateway = new GatewayClient(endpoints.gateway, config.botToken, {
+		watchdogMarginMs: config.watchdogMarginMs,
+	});
 	gateway.on('ready', (user) => {
 		eventer.setBotUserId(user.id);
 		scheduler.start();
