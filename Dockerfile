@@ -1,7 +1,12 @@
 # syntax=docker/dockerfile:1
 
 # -- Build stage -------------------------------------------------------------
-FROM node:22-alpine AS build
+# node >= 22.23.4: security release that updates the bundled root CA store to
+# NSS 3.131.1, dropping the compromised eMudhra "emSign ECC Root CA - G3"
+# (CVE-2026-113812); its alpine base also ships ca-certificates 20261020-r0.
+# Pinned by multi-arch index digest for reproducible builds (Renovate bumps
+# tag + digest together).
+FROM node:22.23.4-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS build
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci || npm install
@@ -10,7 +15,7 @@ COPY src ./src
 RUN npm run build
 
 # -- Runtime stage -----------------------------------------------------------
-FROM node:22-alpine
+FROM node:22.23.4-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
 WORKDIR /app
 ENV NODE_ENV=production
 
