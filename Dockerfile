@@ -27,7 +27,17 @@ LABEL org.opencontainers.image.title="eventer" \
 	org.opencontainers.image.authors="JoaoCostaIFG"
 
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev || npm install --omit=dev
+# npm is needed only for the install above; strip it (plus corepack and
+# yarn) from the final layer afterwards. The runtime only ever runs
+# `node dist/index.js`, and the npm bundled with node 22 ships deps with
+# open HIGH CVEs (brace-expansion, ip-address, pacote, picomatch,
+# sigstore, ...) whose fixes only exist in npm 11's dependency tree, so
+# no node 22 base image can ever clear them. Dropping the package
+# managers removes that whole finding class (~90MB smaller too).
+RUN npm ci --omit=dev || npm install --omit=dev \
+	&& rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+		/usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+		/usr/local/bin/yarn /usr/local/bin/yarnpkg /opt/yarn*
 COPY --from=build /app/dist ./dist
 RUN mkdir -p /app/data && chown -R node:node /app
 USER node
